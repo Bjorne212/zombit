@@ -1,22 +1,30 @@
 // Simulation: movement, collisions, weapon, difficulty. No DOM, no allocations.
 
-import { W, H, STEP, MAX_Z, MAX_B, MAX_P, MAX_D, GUN_Y, MUZZLE, SPAWN_MARGIN, EDGE_X, EDGE_Y, STATS, spawnInterval } from './config.js';
 import {
-  G, P, input, Z_ARRAYS, B_ARRAYS,
+  W, H, STEP, MAX_Z, MAX_B, MAX_P, MAX_D, MAX_K, GUN_Y, MUZZLE, SPAWN_MARGIN, EDGE_X, EDGE_Y,
+  STATS, DMG_STEP, SPD_STEP, PICK_RADIUS, BOSS_AT, ORB_EVERY, ORB_RADIUS, ORB_DAMAGE, spawnInterval,
+} from './config.js';
+import {
+  G, P, input, hpScale, Z_ARRAYS, B_ARRAYS, K_ARRAYS, O_ARRAYS,
+  orbX, orbY, orbVx, orbVy,
+  kx, ky, ktype,
   zx, zy, zvx, zvy, zspeed, zhp, zflash, ztype,
   bx, by, bvx, bvy, blife,
   px, py, pvx, pvy, plife, pcol,
   dx, dy, dcol,
   C_BLOOD, C_DARK, C_STAIN, C_SPARK, C_WHITE,
 } from './state.js';
-import { ZOMBIES, pickType } from './zombies.js';
+import { ZOMBIES, BOSS, pickType } from './zombies.js';
 import { buildGrid, head, next, COLS, ROWS, cellX, cellY } from './grid.js';
-import { sfxShot, sfxHit, sfxKill, sfxHurt } from './audio.js';
+import { sfxShot, sfxHit, sfxKill, sfxHurt, sfxPickup, sfxBoss } from './audio.js';
 
 export function reset() {
-  G.zn = G.bn = G.dn = G.time = G.kills = G.shake = 0;
+  G.zn = G.bn = G.dn = G.kn = G.orbN = G.time = G.tick = G.shake = G.bosses = 0;
+  G.bossAt = BOSS_AT;
+  G.orbIn = ORB_EVERY;
   G.spawnIn = 0.5;
-  G.over = false;
+  G.over = G.fight = false;
+  STATS.damage = STATS.attackSpeed = 1;
   plife.fill(0);
   P.x = W / 2; P.y = H / 2;
   P.vx = P.vy = P.inv = P.cool = P.flash = P.walk = 0;
@@ -30,20 +38,20 @@ export function spawnZombie(type, x, y) {
   zx[i] = x; zy[i] = y;
   zvx[i] = zvy[i] = zflash[i] = 0;
   zspeed[i] = t.speed * (0.85 + Math.random() * 0.3); // spread, so the crowd is not in step
-  zhp[i] = t.hp;
+  zhp[i] = t.hp * hpScale();
   ztype[i] = type;
   return i;
 }
 
 // Spawns a zombie just outside the screen.
-function spawnAtEdge() {
+function spawnAtEdge(type) {
   const m = SPAWN_MARGIN, side = Math.random() * (W + H) * 2;
   let x, y;
   if (side < W) { x = side; y = -m; }
   else if (side < W * 2) { x = side - W; y = H + m; }
   else if (side < W * 2 + H) { x = -m; y = side - W * 2; }
   else { x = W + m; y = side - W * 2 - H; }
-  spawnZombie(pickType(G.time), x, y);
+  spawnZombie(type, x, y);
 }
 
 function emit(x, y, n, speed, col, dirX, dirY) {
@@ -82,7 +90,7 @@ function updatePlayer() {
 function updateWeapon() {
   P.cool -= STEP;
   if (!input.fire || P.cool > 0 || G.bn >= MAX_B) return;
-  P.cool = STATS.fireRate;
+  P.cool = STATS.fireRate / STATS.attackSpeed;
   P.flash = 0.05;
 
   const a = P.aim + (Math.random() - 0.5) * STATS.spread;
@@ -107,15 +115,18 @@ function updateZombies() {
   }
 }
 
-function hurtPlayer(i, ux, uy) {
+function hurtPlayer(damage, knock, ux, uy) {
   P.inv = STATS.invuln;
-  P.hp -= ZOMBIES[ztype[i]].damage;
-  P.vx += ux * STATS.hurtKnock;
-  P.vy += uy * STATS.hurtKnock;
+  P.hp -= damage;
+  P.vx += ux * knock;
+  P.vy += uy * knock;
   G.shake = 0.25;
   emit(P.x, P.y, 10, 60, C_BLOOD, ux, uy);
   sfxHurt();
-  if (P.hp <= 0) G.over = true;
+  if (P.hp <= 0) {
+    G.over = true;
+    G.shake = 0; // the timer stops at death, so the shake would never end
+  }
 }
 
 // Separates overlapping zombies and hurts the player on contact.
@@ -139,16 +150,18 @@ function collideBodies() {
       }
     }
 
-    // Zombies are pushed away so the player never gets stuck.
+    // Light zombies give way, so the player never gets stuck. Heavy ones push the player.
     const ox = zx[i] - P.x, oy = zy[i] - P.y, min = ri + STATS.radius, d2 = ox * ox + oy * oy;
     if (d2 < min * min) {
       const d = Math.sqrt(d2) || 1, ux = ox / d, uy = oy / d;
-      zx[i] = P.x + ux * min;
-      zy[i] = P.y + uy * min;
+      if (ti.mass > 1) { P.x = zx[i] - ux * min; P.y = zy[i] - uy * min; }
+      else { zx[i] = P.x + ux * min; zy[i] = P.y + uy * min; }
       if (P.inv <= 0 && !G.over) {
-        hurtPlayer(i, -ux, -uy);
-        zvx[i] += ux * 40;
-        zvy[i] += uy * 40;
+        hurtPlayer(ti.damage, STATS.hurtKnock + (ti.mass - 1) * 40, -ux, -uy); // heavy zombies push harder
+        if (!ti.noKnock) {
+          zvx[i] += ux * 40;
+          zvy[i] += uy * 40;
+        }
       }
     }
   }
@@ -182,8 +195,10 @@ function updateBullets() {
       const inv = 1 / STATS.bulletSpeed, ux = bvx[b] * inv, uy = bvy[b] * inv;
       const t = ZOMBIES[ztype[hit]];
       zhp[hit] -= STATS.damage;
-      zvx[hit] += ux * STATS.knock / t.mass;
-      zvy[hit] += uy * STATS.knock / t.mass;
+      if (!t.noKnock) {
+        zvx[hit] += ux * STATS.knock / t.mass;
+        zvy[hit] += uy * STATS.knock / t.mass;
+      }
       zflash[hit] = 0.07;
       emit(zx[hit], zy[hit], 4, 50, C_BLOOD, ux, uy);
       if (zhp[hit] > 0) sfxHit();
@@ -196,6 +211,48 @@ function updateBullets() {
   }
 }
 
+// Drops a random power-up near (x, y), always inside the arena.
+function dropPickup(x, y) {
+  if (G.kn >= MAX_K) return;
+  const i = G.kn++, a = Math.random() * 6.283, r = 6 + Math.random() * 16;
+  kx[i] = Math.min(W - EDGE_X, Math.max(EDGE_X, x + Math.cos(a) * r));
+  ky[i] = Math.min(H - EDGE_Y, Math.max(EDGE_Y, y + Math.sin(a) * r));
+  ktype[i] = Math.random() * 3;
+}
+
+function updatePickups() {
+  for (let i = G.kn - 1; i >= 0; i--) {
+    const ox = kx[i] - P.x, oy = ky[i] - P.y;
+    if (ox * ox + oy * oy > PICK_RADIUS * PICK_RADIUS) continue;
+    if (ktype[i] === 2) {
+      if (P.hp >= STATS.hp) continue; // hearts stay on the ground at full life
+      P.hp++;
+    } else if (ktype[i]) STATS.attackSpeed += SPD_STEP;
+    else STATS.damage += DMG_STEP;
+    sfxPickup();
+    const last = --G.kn;
+    for (let a = 0; a < K_ARRAYS.length; a++) K_ARRAYS[a][i] = K_ARRAYS[a][last];
+  }
+}
+
+// Orbs fly straight and only stop at the player or outside the screen.
+function updateOrbs() {
+  for (let o = G.orbN - 1; o >= 0; o--) {
+    orbX[o] += orbVx[o] * STEP;
+    orbY[o] += orbVy[o] * STEP;
+    const ox = P.x - orbX[o], oy = P.y - orbY[o], r = ORB_RADIUS + STATS.radius;
+    const hit = P.inv <= 0 && !G.over && ox * ox + oy * oy < r * r;
+    if (hit) {
+      const d = Math.sqrt(ox * ox + oy * oy) || 1;
+      hurtPlayer(ORB_DAMAGE, STATS.hurtKnock, ox / d, oy / d);
+    }
+    if (hit || orbX[o] < -8 || orbX[o] > W + 8 || orbY[o] < -8 || orbY[o] > H + 8) {
+      const last = --G.orbN;
+      for (let a = 0; a < O_ARRAYS.length; a++) O_ARRAYS[a][o] = O_ARRAYS[a][last];
+    }
+  }
+}
+
 // Runs after bullets: the grid holds old indices until the next rebuild.
 function removeDead() {
   for (let i = G.zn - 1; i >= 0; i--) {
@@ -203,7 +260,8 @@ function removeDead() {
     emit(zx[i], zy[i], 12, 70, C_DARK, 0, 0);
     emit(zx[i], zy[i], 6, 40, C_WHITE, 0, 0);
     sfxKill();
-    G.kills++;
+    if (ztype[i] === BOSS) { G.fight = false; G.bosses++; }
+    for (let k = ZOMBIES[ztype[i]].drops; k > 0; k--) dropPickup(zx[i], zy[i]);
     const last = --G.zn;
     for (let a = 0; a < Z_ARRAYS.length; a++) Z_ARRAYS[a][i] = Z_ARRAYS[a][last];
   }
@@ -226,14 +284,23 @@ function updateParticles() {
 }
 
 function updateDirector() {
+  if (!G.fight && G.time >= G.bossAt) {
+    G.fight = true;
+    G.bossAt += BOSS_AT;
+    G.orbIn = ORB_EVERY;
+    spawnAtEdge(BOSS);
+    sfxBoss();
+  }
+  if (G.fight) return;
   G.spawnIn -= STEP;
   if (G.spawnIn > 0) return;
   G.spawnIn = spawnInterval(G.time);
-  spawnAtEdge();
+  spawnAtEdge(pickType(G.time));
 }
 
 export function update() {
-  G.time += STEP;
+  G.tick += STEP;
+  if (!G.fight) G.time += STEP; // the timer waits for the boss to die
   if (G.shake > 0) G.shake -= STEP;
   updatePlayer();
   updateWeapon();
@@ -241,7 +308,9 @@ export function update() {
   buildGrid();
   collideBodies();
   updateBullets();
+  updateOrbs();
   removeDead();
+  updatePickups();
   updateParticles();
   updateDirector();
 }

@@ -5,7 +5,7 @@ export const SCALE = 2; // pixels per world unit
 export const STEP = 1 / 60; // fixed physics step
 
 // Pool sizes, allocated once at start.
-export const MAX_Z = 256, MAX_B = 128, MAX_P = 256, MAX_D = 64;
+export const MAX_Z = 256, MAX_B = 128, MAX_P = 256, MAX_D = 64, MAX_K = 32, MAX_O = 32;
 
 // Grid cell must exceed largest radius + bullet step.
 export const CELL = 16;
@@ -25,13 +25,22 @@ export const STATS = {
   invuln: 1, // seconds immune after a hit
   hurtKnock: 170,
   fireRate: 0.17, // seconds between shots
-  damage: 1,
+  damage: 1, // raised by power-ups
+  attackSpeed: 1, // raised by power-ups
   bulletSpeed: 300,
   bulletLife: 1,
   spread: 0.05, // radians
   knock: 55, // push on hit
   recoil: 10,
 };
+
+// Power-ups.
+export const DMG_STEP = 0.1, SPD_STEP = 0.1, PICK_RADIUS = 7;
+
+export const BOSS_AT = 60; // a boss every this many seconds
+export const ORB_EVERY = 1.4, ORB_SPEED = 75, ORB_RADIUS = 3, ORB_DAMAGE = 1;
+// Added per defeated boss.
+export const ORB_RATE_STEP = 0.2, ORB_SPEED_STEP = 0.12, HP_STEP = 0.5;
 
 // Difficulty: seconds between spawns.
 export const spawnInterval = (t) => Math.max(0.22, 1.5 * Math.exp(-t / 80));

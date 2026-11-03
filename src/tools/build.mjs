@@ -14,23 +14,25 @@ const LIMIT = 20000; // bytes in dist
 const PORT = 8123;
 const SHELL = 'game/index.html';
 const VIEWS = ['S', 'SE', 'E', 'NE', 'N'];
-const LEG_ROWS = 6; // only these rows change between frames
 const RUNTIME_KEYS = 'keEtrRyw'; // colors used directly by the game
-// shift: S and N move left to share rows with other views. center: body center per view.
+// lower: rows that change between frames. shift: moves S and N left to share rows.
+// center: body center per view.
+const NO_SHIFT = [0, 0, 0, 0, 0];
 const FIGURES = {
-  player: { shift: [3, 0, 0, 0, 3], center: [6.5, 6.5, 6.5, 6.5, 6.5] },
-  zombie: { shift: [0, 0, 0, 0, 0], center: [9.5, 6.5, 6.5, 6.5, 9.5] },
+  player: { lower: 6, shift: [3, 0, 0, 0, 3], center: [6.5, 6.5, 6.5, 6.5, 6.5] },
+  zombie: { lower: 6, shift: NO_SHIFT, center: [9.5, 6.5, 6.5, 6.5, 9.5] },
+  tank: { lower: 6, shift: NO_SHIFT, center: [13.5, 13, 13, 13, 13.5] },
+  boss: { lower: 3, shift: NO_SHIFT, center: [23.5, 27, 25, 23, 23.5] },
 };
 
 // Per-row RLE: "gg" becomes "g2", trailing empty pixels are dropped.
 const rle = (r) => r.replace(/\.+$/, '').replace(/(.)\1+/g, (m, c) => c + m.length);
-// Row index as one character, max 92 rows per figure.
-const indexChar = (i) => {
-  if (i > 91) throw new Error('too many unique rows in a figure');
-  return String.fromCharCode(i + 35);
-};
+// Row index in base 92, from character 35 up.
+const indexChars = (i, digits) => (digits > 1
+  ? String.fromCharCode(35 + (i / 92 | 0)) + String.fromCharCode(35 + i % 92)
+  : String.fromCharCode(35 + i));
 // Own property names shortened in dist. Add new fields here. Never list browser API names.
-const MANGLE = /^(zn|bn|pi|dn|time|kills|spawnIn|shake|over|vx|vy|hp|inv|cool|flash|aim|walk|dir|moveX|moveY|aimX|aimY|fire|radius|speed|accel|invuln|hurtKnock|fireRate|damage|bulletSpeed|bulletLife|spread|knock|recoil|mass|unlock|weight|tint|act|ax|ay|solid|outline|flip|x|y|w|h|scale)$/;
+const MANGLE = /^(zn|bn|pi|dn|time|kills|spawnIn|shake|over|vx|vy|hp|inv|cool|flash|aim|walk|dir|moveX|moveY|aimX|aimY|fire|radius|speed|accel|invuln|hurtKnock|fireRate|damage|bulletSpeed|bulletLife|spread|knock|recoil|mass|unlock|weight|tint|act|ax|ay|solid|outline|flip|scale|fig|drops|hover|attackSpeed|kn|tick|bossAt|bosses|fight|noKnock|orbN|orbIn)$/;
 
 function genArt() {
   const p = loadProject('art/art.px.js');
@@ -54,22 +56,22 @@ function genArt() {
 
   // Figures: dictionary of unique rows, then per view the upper body plus three sets of legs.
   const fig = {};
-  for (const [name, { shift, center }] of Object.entries(FIGURES)) {
-    const dict = new Map();
-    const id = (r) => {
-      const k = rle(r);
-      if (!dict.has(k)) dict.set(k, dict.size);
-      return indexChar(dict.get(k));
-    };
-    let index = '', upper = 0;
+  for (const [name, { lower, shift, center }] of Object.entries(FIGURES)) {
+    const dict = new Map(), ids = [];
+    let upper = 0;
     VIEWS.forEach((v, n) => {
       const frames = p.frames(`${name}_${v}`).map((f) => rowsOf(f.img).map((r) => r.slice(shift[n])));
-      upper = frames[0].length - LEG_ROWS;
+      upper = frames[0].length - lower;
       for (let y = 0; y < upper; y++) if (frames.some((f) => f[y] !== frames[0][y])) throw new Error(`${name}_${v} row ${y} changes between frames`);
-      index += [...frames[0].slice(0, upper), ...frames.flatMap((f) => f.slice(upper))].map(id).join('');
+      for (const r of [...frames[0].slice(0, upper), ...frames.flatMap((f) => f.slice(upper))]) {
+        const k = rle(r);
+        if (!dict.has(k)) dict.set(k, dict.size);
+        ids.push(dict.get(k));
+      }
     });
+    const digits = dict.size > 92 ? 2 : 1;
     const w = p.frames(`${name}_S`)[0].img.w;
-    fig[name] = [w, upper, [...dict.keys()].join(','), index, center];
+    fig[name] = [w, upper, lower, digits, [...dict.keys()].join(','), ids.map((i) => indexChars(i, digits)).join(''), center];
   }
 
   const spr = {};
@@ -82,12 +84,14 @@ function genArt() {
       ? [img.w / 2, rows.filter((_, y) => y % 2 === 0).map((r) => rle([...r].filter((_, x) => x % 2 === 0).join(''))).join(','), 2]
       : [img.w, rows.map(rle).join(',')];
   }
+  // Names looked up as data must never be shortened.
+  for (const k of [...Object.keys(fig), ...Object.keys(spr), ...used]) if (MANGLE.test(k)) throw new Error(`"${k}" is both data and in MANGLE`);
   let palette = '';
   for (const k of used) palette += k + (pal.keys.get(k) >>> 8).toString(16).padStart(6, '0');
 
-  // 3x5 font: 15 bits per glyph, only digits and characters used in main.js.
-  const texts = readFileSync('game/main.js', 'utf8').match(/'[A-Z0-9 -]+'/g).join('');
-  const fontChars = [...new Set('0123456789' + texts.replace(/[' ]/g, ''))].join('');
+  // 3x5 font: 15 bits per glyph, only digits, time marks and characters used in the game texts.
+  const texts = ['game/main.js', 'game/gfx.js'].map((f) => readFileSync(f, 'utf8').match(/'[A-Z0-9 -]+'/g).join('')).join('');
+  const fontChars = [...new Set('0123456789:.' + texts.replace(/[' ]/g, ''))].join('');
   let font = '';
   for (const ch of fontChars) {
     let bits = 0;

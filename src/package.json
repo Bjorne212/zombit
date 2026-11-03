@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node tools/build.mjs",
     "dev": "node tools/build.mjs --serve",
-    "test": "node --test"
+    "images": "node tools/images.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

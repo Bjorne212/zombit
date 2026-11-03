@@ -32,10 +32,15 @@ export function releaseAll() {
   updateMove();
 }
 
-export function initInput(canvas, onPress) {
+export function initInput(canvas, onPress, onMute, onPause) {
   fit(canvas);
   addEventListener('resize', () => fit(canvas));
-  addEventListener('keydown', (e) => setKey(e, 1));
+  addEventListener('keydown', (e) => {
+    setKey(e, 1);
+    if (e.repeat) return;
+    if (e.code === 'KeyM') onMute();
+    if (e.code === 'Escape') onPause();
+  });
   addEventListener('keyup', (e) => setKey(e, 0));
   addEventListener('mousemove', (e) => {
     input.aimX = (e.clientX - originX) / scale;
