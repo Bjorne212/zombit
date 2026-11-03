@@ -1,0 +1,21 @@
+{
+  "name": "zombit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal zombie holdout in pixel art. Runs in the browser, under 20 KB.",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "dev": "node tools/build.mjs --serve",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "pxl-pixelart": "github:crsolver/claude-pxl#21fee41",
+    "roadroller": "2.1.0",
+    "terser": "5.51.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
