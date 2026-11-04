@@ -1,7 +1,7 @@
 # Zombit
 
 A top-down zombie holdout in pixel art. It runs in the browser from a single HTML file of about 12 KB, with no assets and no runtime libraries.
-
+Game: https://bjorne212.github.io/zombit/
 ![The player surrounded by a horde of zombies and tanks](images/screenshot-horde.png)
 
 ## Play
